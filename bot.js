@@ -1,66 +1,65 @@
-const TelegramBot = require('node-telegram-bot-api');
-const axios = require('axios');
+const TelegramBot = require("node-telegram-bot-api");
+const axios = require("axios");
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const CHAT_ID = process.env.CHAT_ID;
+
+if (!BOT_TOKEN || !CHAT_ID) {
+  console.error("❌ Missing BOT_TOKEN or CHAT_ID");
+  process.exit(1);
+}
 
 const bot = new TelegramBot(BOT_TOKEN, { polling: true });
 
 console.log("🚀 Solhunt Meme Scanner started...");
 
-// ===== FILTER SETTINGS =====
-const MIN_LIQUIDITY = 5000;
-const MIN_VOLUME = 10000;
-const MIN_TXNS = 50;
-
-let sent = new Set();
+// ===== SETTINGS =====
+const MIN_LIQUIDITY = 8000;
+const MIN_MC = 8000;
+const MIN_AGE_MINUTES = 2;
 
 // ===== SCANNER =====
-async function scan() {
+async function scanSolanaPairs() {
   try {
     console.log("🔍 Scanning Solana pairs...");
 
     const res = await axios.get(
-      "https://api.dexscreener.com/latest/dex/pairs/solana"
+      "https://api.dexscreener.com/latest/dex/pairs/solana",
+      { timeout: 15000 }
     );
 
-    const pairs = res.data.pairs || [];
+    if (!res.data || !res.data.pairs) {
+      console.log("⚠️ No pairs returned");
+      return;
+    }
 
+    const pairs = res.data.pairs;
     console.log(`✅ Pairs received: ${pairs.length}`);
 
-    for (const p of pairs) {
-      const liquidity = p.liquidity?.usd || 0;
-      const volume = p.volume?.h24 || 0;
-      const txns = p.txns?.h24?.buys + p.txns?.h24?.sells || 0;
-      const symbol = p.baseToken?.symbol || "UNKNOWN";
+    for (const pair of pairs.slice(0, 20)) {
+      try {
+        const liquidity = pair.liquidity?.usd || 0;
+        const mc = pair.fdv || 0;
+        const ageMinutes =
+          (Date.now() - (pair.pairCreatedAt || Date.now())) / 60000;
 
-      // Meme-style filter
-      const isMeme =
-        symbol.length <= 6 &&
-        !symbol.includes("SOL") &&
-        !symbol.includes("USDC");
+        if (
+          liquidity >= MIN_LIQUIDITY &&
+          mc >= MIN_MC &&
+          ageMinutes >= MIN_AGE_MINUTES
+        ) {
+          const msg = `
+🚀 *${pair.baseToken?.name || "Unknown"}*
+💰 MC: $${Math.round(mc)}
+💧 Liquidity: $${Math.round(liquidity)}
+⏱ Age: ${ageMinutes.toFixed(1)} min
+🔗 ${pair.url}
+          `;
 
-      if (
-        isMeme &&
-        liquidity > MIN_LIQUIDITY &&
-        volume > MIN_VOLUME &&
-        txns > MIN_TXNS &&
-        !sent.has(p.pairAddress)
-      ) {
-        sent.add(p.pairAddress);
-
-        const msg =
-`🔥 NEW SOLANA GEM
-
-💎 ${symbol}
-💧 Liquidity: $${liquidity.toLocaleString()}
-📊 Volume 24h: $${volume.toLocaleString()}
-🔁 Txns 24h: ${txns}
-
-🔗 https://dexscreener.com/solana/${p.pairAddress}`;
-
-        await bot.sendMessage(CHAT_ID, msg);
-        console.log("✅ Sent:", symbol);
+          await bot.sendMessage(CHAT_ID, msg, { parse_mode: "Markdown" });
+        }
+      } catch (innerErr) {
+        console.log("⚠️ Pair skipped");
       }
     }
   } catch (err) {
@@ -68,6 +67,8 @@ async function scan() {
   }
 }
 
-// run every 60 sec
-setInterval(scan, 60000);
-scan();
+// ===== LOOP =====
+setInterval(scanSolanaPairs, 60000);
+
+// run immediately
+scanSolanaPairs();
